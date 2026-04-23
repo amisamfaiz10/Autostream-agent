@@ -117,4 +117,4 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-GEMINI_API_KEY='AIzaSyDi6oydWpSkZy_ZgH1Tok4vOu0htUS1_fw'
+GEMINI_API_KEY='api_key'
