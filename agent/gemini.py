@@ -1,56 +1,63 @@
 import google.generativeai as genai
 from django.conf import settings
 
-# API
 genai.configure(api_key=settings.GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
-# MODEL
-model = genai.GenerativeModel("gemini-flash-latest")
 
-#  INTENT DETECTION
-def detect_intent(message):
-    text = message.lower()
+def detect_intent(message: str) -> str:
+    """
+    Keyword-based intent classification.
+    Returns: 'high_intent' | 'product_inquiry' | 'greeting'
+    """
+    text = (message or "").lower()
 
-    #  HIGH INTENT FIRST
-    if any(word in text for word in ["buy", "subscribe", "i want", "sign up"]):
+    # High intent — ready to convert
+    if any(word in text for word in [
+        "buy", "purchase", "subscribe", "get started",
+        "sign up", "register", "interested", "want to try",
+        "i want", "i'd like", "let's go"
+    ]):
         return "high_intent"
 
-    #  PRODUCT
-    if any(word in text for word in ["price", "pricing", "cost", "plan", "pro", "basic"]):
+    # Product/pricing questions
+    if any(word in text for word in [
+        "price", "pricing", "cost", "plan", "pro", "basic",
+        "feature", "refund", "support", "how much", "what does"
+    ]):
         return "product_inquiry"
 
-    # GREETING
-    if any(word in text for word in ["hi", "hello", "hey"]):
+    # Greeting
+    if any(word in text for word in ["hi", "hello", "hey", "good morning", "good evening"]):
         return "greeting"
 
+    # Default: treat as a product inquiry
     return "product_inquiry"
 
 
-#  RAG RESPONSE
-def generate_rag_response(query, context):
+def generate_rag_response(query: str, context: str) -> str:
+    """Generate a natural response using Gemini, grounded in the retrieved context."""
     try:
-        prompt = f"""
-        You are a helpful assistant for AutoStream.
+        prompt = f"""You are a friendly and helpful sales assistant for AutoStream, 
+a SaaS platform for automated video editing.
 
-        Use the information below to answer the question clearly.
+Use ONLY the information below to answer the user's question. 
+Be concise, helpful, and natural. Don't mention that you're using a knowledge base.
 
-        Context:
-        {context}
+Knowledge Base:
+{context}
 
-        Question:
-        {query}
+User question: {query}
 
-        Give a helpful and clear answer.
-        """
+Answer:"""
 
         response = model.generate_content(prompt)
 
-        #  SAFE HANDLING
         if not response or not response.text:
-            return "Sorry, I couldn't generate a response."
+            return "Sorry, I couldn't generate a response right now."
 
         return response.text.strip()
 
     except Exception as e:
-        print("Gemini Error:", e)
-        return "Error generating response."
+        print("[Gemini Error]", e)
+        return context  # Fallback: return raw context
