@@ -20,8 +20,9 @@ def chat_view(request):
     try:
         data = json.loads(request.body)
         message = data.get("message", "")
+        text = message.lower()
 
-        # Load session memory
+        # Load session state
         state = request.session.get("agent_state", {
             "message": "",
             "intent": "",
@@ -32,15 +33,31 @@ def chat_view(request):
             "step": None
         })
 
-        # Update message
+        #  HIGH INTENT → RESET FLOW (FIXES YOUR ISSUE)
+        if any(word in text for word in ["buy", "purchase", "subscribe", "start"]):
+            state = {
+                "message": "get started",
+                "intent": "",
+                "response": "Let's get started. What's your name?",
+                "name": None,
+                "email": None,
+                "platform": None,
+                "step": "name"
+            }
+
+            request.session["agent_state"] = state
+            request.session.modified = True
+
+            return JsonResponse({"response": state["response"]})
+
+        # Continue normal flow
         state["message"] = message
 
-        #  Run LangGraph
         try:
             result = app.invoke(state)
             response = result.get("response", "No response")
 
-            #  Save state back
+            # Save updated state
             request.session["agent_state"] = result
             request.session.modified = True
 
@@ -53,7 +70,6 @@ def chat_view(request):
     except Exception as e:
         print("VIEW ERROR:", e)
         return JsonResponse({"response": "Server error occurred."})
-
 
 
 from django.shortcuts import render
