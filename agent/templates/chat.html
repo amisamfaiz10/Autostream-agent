@@ -166,13 +166,13 @@ window.onload = () => {
     `;
 };
 
-// ✅ Quick buttons
+// Quick buttons
 function quickMsg(text) {
     document.getElementById("message").value = text;
     sendMessage();
 }
 
-// ✅ Typing animation
+// Typing animation
 function typeMessage(text) {
     const chatBox = document.getElementById("chat-box");
 
@@ -193,7 +193,7 @@ function typeMessage(text) {
     typing();
 }
 
-// ✅ Send message
+// Send message
 async function sendMessage() {
     const input = document.getElementById("message");
     const chatBox = document.getElementById("chat-box");
@@ -239,12 +239,12 @@ async function sendMessage() {
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-// ✅ Enter key support
+//  Enter key support
 document.getElementById("message").addEventListener("keypress", function(e) {
     if (e.key === "Enter") sendMessage();
 });
 
-// ✅ Clear chat
+// Clear chat
 function clearChat() {
     document.getElementById("chat-box").innerHTML = "";
 }
