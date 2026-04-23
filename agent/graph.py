@@ -1,4 +1,10 @@
 from typing import TypedDict, Optional
+from langgraph.graph import StateGraph
+
+from .gemini import detect_intent, generate_rag_response
+from .rag import retrieve_context
+from .tools import mock_lead_capture
+
 
 class AgentState(TypedDict):
     message: str
@@ -10,128 +16,138 @@ class AgentState(TypedDict):
     step: Optional[str]
 
 
+# ─────────────────────────────────────────────
+# NODES
+# ─────────────────────────────────────────────
 
-from .gemini import detect_intent, generate_rag_response
-from .rag import retrieve_context
-from .tools import mock_lead_capture
-
-
-def greeting_node(state):
-    return {**state, "response": "Hey! How can I help you with AutoStream?"}
+def greeting_node(state: AgentState) -> AgentState:
+    return {**state, "response": "Hey! 👋 How can I help you with AutoStream today?"}
 
 
+def intent_node(state: AgentState) -> AgentState:
+    """Detect intent only when we're NOT mid lead-capture flow."""
+    # If a lead flow is already in progress, preserve intent so router keeps us in lead
+    if state.get("step") and state["step"] not in (None, "done"):
+        return state
 
-#  Intent Node
-def intent_node(state):
-    message = (state.get("message") or "").lower()
-
-    intent = detect_intent(message)
-
-    # reset on new queries
-    if any(word in message for word in ["price", "plan", "cost", "tell", "what"]):
-        return {**state, "intent": "product_inquiry", "step": None}
-
-    if any(word in message for word in ["hi", "hello", "hey"]):
-        return {**state, "intent": "greeting", "step": None}
-
+    intent = detect_intent(state.get("message", ""))
     return {**state, "intent": intent}
 
 
+def rag_node(state: AgentState) -> AgentState:
+    message = state.get("message", "")
+    context = retrieve_context(message)
 
-#  RAG Node
-def rag_node(state):
+    if not context:
+        return {**state, "response": "I don't have specific info on that. Feel free to ask about our pricing or plans!"}
+
     try:
-        message = state.get("message", "")
-        context = retrieve_context(message)
-
-        if not context:
-            return {**state, "response": "I couldn't find info on that."}
-
-        try:
-            response = generate_rag_response(message, context)
-        except Exception as e:
-            print("Gemini failed:", e)
-            response = context  # fallback
-
-        return {**state, "response": response}
-
+        response = generate_rag_response(message, context)
     except Exception as e:
-        print("RAG NODE ERROR:", e)
-        return {**state, "response": "Something went wrong."}
+        print("Gemini failed:", e)
+        response = context  # fallback to raw context
+
+    return {**state, "response": response}
 
 
+def lead_node(state: AgentState) -> AgentState:
+    """
+    Step machine for lead capture.
 
-
-#  Lead Node
-def lead_node(state):
+    step=None      → start flow, ask for name
+    step='name'    → user just sent their name, save it, ask for email
+    step='email'   → user just sent their email, save it, ask for platform
+    step='platform'→ user just sent their platform, save it, call API
+    """
     step = state.get("step")
+    message = state.get("message", "").strip()
 
-    # Step 1: Ask name
-    if step == "asking_name":
-        return {**state, "response": "What's your name?", "step": "get_name"}
+    # ── Step 0: Kick off the flow ──────────────────────────
+    if not step or step == "done":
+        return {
+            **state,
+            "step": "name",
+            "response": "Awesome! Let's get you set up 🚀\n\nWhat's your **name**?"
+        }
 
-    if step == "get_name":
-        state["name"] = state["message"]
-        return {**state, "response": "Enter your email", "step": "get_email"}
+    # ── Step 1: Name just received → ask email ─────────────
+    if step == "name":
+        return {
+            **state,
+            "name": message,
+            "step": "email",
+            "response": f"Nice to meet you, {message}! What's your **email address**?"
+        }
 
-    if step == "get_email":
-        state["email"] = state["message"]
-        return {**state, "response": "Which platform?", "step": "get_platform"}
+    # ── Step 2: Email just received → ask platform ─────────
+    if step == "email":
+        return {
+            **state,
+            "email": message,
+            "step": "platform",
+            "response": "Almost there! Which creator platform are you on? (e.g. YouTube, Instagram, TikTok)"
+        }
 
-    if step == "get_platform":
-        state["platform"] = state["message"]
+    # ── Step 3: Platform just received → fire API ──────────
+    if step == "platform":
+        name = state.get("name", "Unknown")
+        email = state.get("email", "Unknown")
+        platform = message
 
-        mock_lead_capture(
-            state["name"],
-            state["email"],
-            state["platform"]
-        )
+        result = mock_lead_capture(name, email, platform)
+        print("Lead capture result:", result)
 
         return {
             **state,
-            "response": "Awesome! Our team will reach out to you shortly.",
-            "step": "done"
+            "platform": platform,
+            "step": "done",
+            "response": (
+                f"You're all set, {name}! 🎉\n\n"
+                f"Our team will reach out to **{email}** shortly to get you started on AutoStream.\n\n"
+                f"In the meantime, feel free to ask anything else!"
+            )
         }
 
-    # Start flow
-    return {**state, "response": "Let's get started. What's your name?", "step": "get_name"}
+    # Fallback (shouldn't be reached)
+    return {**state, "response": "Something went wrong with the lead flow. Let's start over — what's your name?", "step": "name"}
 
 
+# ─────────────────────────────────────────────
+# ROUTER
+# ─────────────────────────────────────────────
 
+def route(state: AgentState) -> str:
+    step = state.get("step")
 
-
-def route(state):
-
-    # Continue lead ONLY if explicitly in flow
-    if state.get("step") and state["step"] != "done":
+    # Mid lead-capture flow → keep going
+    if step and step not in (None, "done"):
         return "lead"
 
-    if state["intent"] == "greeting":
+    intent = state.get("intent", "")
+
+    if intent == "greeting":
         return "greeting"
-
-    if state["intent"] == "high_intent":
+    if intent == "high_intent":
         return "lead"
-
-    if state["intent"] == "product_inquiry":
+    if intent == "product_inquiry":
         return "rag"
 
+    # Default fallback
     return "greeting"
 
 
-
-
-
-from langgraph.graph import StateGraph
+# ─────────────────────────────────────────────
+# GRAPH
+# ─────────────────────────────────────────────
 
 workflow = StateGraph(AgentState)
+
 workflow.add_node("greeting", greeting_node)
 workflow.add_node("intent", intent_node)
 workflow.add_node("rag", rag_node)
 workflow.add_node("lead", lead_node)
 
-# Flow
 workflow.set_entry_point("intent")
-
 
 workflow.add_conditional_edges("intent", route)
 workflow.add_edge("greeting", "__end__")
@@ -139,4 +155,3 @@ workflow.add_edge("rag", "__end__")
 workflow.add_edge("lead", "__end__")
 
 app = workflow.compile()
-
